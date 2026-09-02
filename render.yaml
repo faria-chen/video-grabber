@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: video-grabber
+    env: python
+    buildCommand: pip install -r requirements.txt && playwright install chromium
+    startCommand: python app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
