@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,6 +27,15 @@ logger = logging.getLogger(__name__)
 
 # 创建FastAPI应用
 app = FastAPI(title="视频抓取器", version="1.0.0")
+
+# CORS - 允许前端跨域调用
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 创建目录
 UPLOAD_DIR = Path("downloads")
