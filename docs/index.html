@@ -55,9 +55,6 @@
         .tips h4 { margin-bottom: 8px; }
         .tips ul { padding-left: 20px; }
         .tips li { margin-bottom: 4px; }
-        .proxy-notice {
-            margin-top: 15px; padding: 12px; background: #fff3cd; border-radius: 8px; font-size: 0.8em; color: #856404; text-align: center;
-        }
     </style>
 </head>
 <body>
@@ -83,21 +80,20 @@
             <div class="result" id="result"></div>
             
             <div class="tips">
-                <h4> 使用说明</h4>
+                <h4>使用说明</h4>
                 <ul>
                     <li>打开对应App → 点击分享 → 复制链接</li>
                     <li>粘贴到上方输入框 → 点击抓取</li>
                     <li>支持微信视频号、抖音、小红书</li>
                 </ul>
             </div>
-            
-            <div class="proxy-notice">
-                 提示：由于浏览器跨域限制，部分视频可能需要配合代理服务使用
-            </div>
         </div>
     </div>
     
     <script>
+        // 后端 API 地址（Render 部署后改成你的地址）
+        const API_BASE = 'https://video-grabber.onrender.com';
+
         document.getElementById('videoUrl').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') grabVideo();
         });
@@ -113,117 +109,39 @@
             
             btn.disabled = true;
             btn.textContent = '抓取中...';
-            showResult('<div class="loading"> 正在解析视频...</div>');
+            showResult('<div class="loading">⏳ 正在解析视频，请稍候...</div>');
             
             try {
-                const platform = detectPlatform(url);
-                let videoData = null;
+                const formData = new FormData();
+                formData.append('url', url);
+                formData.append('platform', 'auto');
                 
-                // 尝试通过多个代理API解析
-                videoData = await tryParseWithProxy(url, platform);
+                const response = await fetch(API_BASE + '/api/grab', {
+                    method: 'POST',
+                    body: formData
+                });
                 
-                if (videoData && videoData.videoUrl) {
+                const data = await response.json();
+                
+                if (response.ok && data.video_url) {
                     showResult(`
                         <div class="video-info">
-                            <h3> ${videoData.title || '视频抓取成功'}</h3>
+                            <h3>✅ ${data.title || '视频抓取成功'}</h3>
                         </div>
-                        <video class="video-preview" controls src="${videoData.videoUrl}"></video>
-                        <a class="download-btn" href="${videoData.videoUrl}" download target="_blank">
-                           ⬇️ 下载视频
+                        <video class="video-preview" controls src="${data.video_url}"></video>
+                        <a class="download-btn" href="${API_BASE}/api/download?video_url=${encodeURIComponent(data.video_url)}&title=${encodeURIComponent(data.title || 'video')}">
+                            ⬇️ 下载视频
                         </a>
                     `);
                 } else {
-                    showResult('<div class="error"> 暂时无法抓取该视频<br>请检查链接是否正确，或稍后重试</div>');
+                    showResult('<div class="error">' + (data.detail || '暂时无法抓取该视频，请检查链接是否正确') + '</div>');
                 }
             } catch (error) {
-                showResult('<div class="error"> 抓取失败: ' + error.message + '</div>');
+                showResult('<div class="error">⚠️ 后端服务未启动，请先在 Render 部署后端<br><br>错误: ' + error.message + '</div>');
             }
             
             btn.disabled = false;
             btn.textContent = '抓取视频';
-        }
-        
-        function detectPlatform(url) {
-            if (url.includes('weixin.qq.com') || url.includes('channels')) return 'wechat';
-            if (url.includes('douyin.com') || url.includes('iesdouyin.com')) return 'douyin';
-            if (url.includes('xiaohongshu.com') || url.includes('xhslink.com')) return 'xiaohongshu';
-            return 'unknown';
-        }
-        
-        async function tryParseWithProxy(url, platform) {
-            // 使用多个免费CORS代理
-            const proxies = [
-                'https://api.allorigins.win/raw?url=',
-                'https://corsproxy.io/?',
-                'https://api.codetabs.com/v1/proxy?quest='
-            ];
-            
-            // 对于抖音，尝试解析短链接获取真实URL
-            if (platform === 'douyin') {
-                return await parseDouyin(url);
-            }
-            
-            // 对于其他平台，尝试使用代理
-            for (const proxy of proxies) {
-                try {
-                    const response = await fetch(proxy + encodeURIComponent(url), { 
-                        signal: AbortSignal.timeout(5000)
-                    });
-                    if (response.ok) {
-                        const html = await response.text();
-                        const videoUrl = extractVideoFromHtml(html);
-                        if (videoUrl) {
-                            return { videoUrl, title: '视频抓取成功' };
-                        }
-                    }
-                } catch (e) {
-                    continue;
-                }
-            }
-            
-            return null;
-        }
-        
-        async function parseDouyin(url) {
-            // 抖音短链接处理
-            try {
-                // 先跟随重定向获取真实URL
-                const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(5000) });
-                const finalUrl = response.url;
-                
-                // 从URL中提取video_id
-                const videoIdMatch = finalUrl.match(/video\/(\d+)/);
-                if (videoIdMatch) {
-                    const videoId = videoIdMatch[1];
-                    // 尝试构造无水印链接
-                    return {
-                        videoUrl: `https://www.douyin.com/video/${videoId}`,
-                        title: '抖音视频',
-                        needRedirect: true
-                    };
-                }
-            } catch (e) {
-                // 如果直接访问失败，提示用户
-            }
-            return null;
-        }
-        
-        function extractVideoFromHtml(html) {
-            // 尝试从HTML中提取视频URL
-            const patterns = [
-                /playAddr.*?src.*?["'](https?:\/\/[^"']+\.mp4[^"']*)/i,
-                /video_url.*?["'](https?:\/\/[^"']+\.mp4[^"']*)/i,
-                /src.*?["'](https?:\/\/[^"']*video[^"']*\.mp4[^"']*)/i,
-                /https?:\/\/[^"'\s]*\.mp4[^"'\s]*/gi
-            ];
-            
-            for (const pattern of patterns) {
-                const match = html.match(pattern);
-                if (match) {
-                    return match[1] || match[0];
-                }
-            }
-            return null;
         }
         
         function showResult(html) {
