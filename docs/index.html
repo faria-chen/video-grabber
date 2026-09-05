@@ -441,7 +441,7 @@
                                 ${platform ? `<span class="result-badge">${platform}</span>` : ''}
                                 <span class="result-title" title="${data.title}">${data.title || '视频抓取成功'}</span>
                             </div>
-                            <video class="video-preview" controls preload="metadata" src="${data.video_url}"></video>
+                            <video class="video-preview" controls preload="metadata" src="${API_BASE}/api/download?video_url=${encodeURIComponent(data.video_url)}&title=${encodeURIComponent(data.title || 'video')}&inline=1"></video>
                             <div class="action-row">
                                 <a class="download-btn" href="${API_BASE}/api/download?video_url=${encodeURIComponent(data.video_url)}&title=${encodeURIComponent(data.title || 'video')}">
                                     ⬇ 下载视频${formatInfo}
