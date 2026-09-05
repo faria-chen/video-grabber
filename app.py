@@ -72,6 +72,7 @@ PLATFORM_PATTERNS = {
     "weibo": [r"weibo\.com", r"m\.weibo\.cn"],
     "vimeo": [r"vimeo\.com"],
     "facebook": [r"facebook\.com", r"fb\.watch"],
+    "weixin": [r"weixin\.qq\.com", r"channels\.weixin\.qq\.com"],
 }
 
 PLATFORM_NAMES = {
@@ -86,6 +87,7 @@ PLATFORM_NAMES = {
     "weibo": "微博",
     "vimeo": "Vimeo",
     "facebook": "Facebook",
+    "weixin": "微信视频号",
 }
 
 
@@ -126,7 +128,7 @@ def get_ydl_opts(url: str, platform: Optional[str] = None) -> dict:
     elif platform == "xiaohongshu":
         base_opts["http_headers"]["Referer"] = "https://www.xiaohongshu.com/"
     elif platform == "youtube":
-        base_opts["format"] = "best[height<=1080]/best"
+        base_opts["format"] = "bestvideo*+bestaudio/best[height<=1080]/best"
     elif platform == "kuaishou":
         base_opts["http_headers"]["Referer"] = "https://www.kuaishou.com/"
 
@@ -181,6 +183,12 @@ async def grab_video(request: Request):
         url = url_match.group(0)
 
     platform = detect_platform(url)
+
+    if platform == "weixin":
+        raise HTTPException(
+            status_code=400,
+            detail="微信视频号暂不支持抓取（需微信登录态，yt-dlp 无法提取）。请使用抖音/小红书/B站/快手/YouTube 等平台链接。",
+        )
 
     try:
         import time
