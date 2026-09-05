@@ -21,17 +21,30 @@ import yt_dlp
 
 app = FastAPI(title="视频抓取器", docs_url=None, redoc_url=None)
 
-# 预热：启动时加载 yt-dlp，避免首次请求冷启动
-@app.on_event("startup")
-async def _warmup():
-    import threading
-    def _preimport():
+# ─── 预热 + Keep-Alive ────────────────────────────────────────────────
+import threading, time as _time
+
+def _warmup_sync():
+    """后台线程：预热 yt-dlp + 周期性 ping 防休眠"""
+    try:
+        import yt_dlp
+        yt_dlp.YoutubeDL({"quiet": True}).params
+    except Exception:
+        pass
+
+    # 每 10 分钟 ping 自己，防止 Render 免费层休眠
+    while True:
+        _time.sleep(600)
         try:
-            import yt_dlp
-            yt_dlp.YoutubeDL({"quiet": True}).params  # 触发完整加载
+            import urllib.request
+            port = os.environ.get("PORT", "8000")
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=5)
         except Exception:
             pass
-    threading.Thread(target=_preimport, daemon=True).start()
+
+@app.on_event("startup")
+async def _warmup():
+    threading.Thread(target=_warmup_sync, daemon=True).start()
 
 # CORS 配置
 app.add_middleware(
@@ -92,9 +105,9 @@ def get_ydl_opts(url: str, platform: Optional[str] = None) -> dict:
     base_opts = {
         "quiet": True,
         "no_warnings": True,
-        "socket_timeout": 15,
-        "retries": 2,
-        "fragment_retries": 2,
+                "socket_timeout": 30,
+        "retries": 3,
+        "fragment_retries": 3,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
