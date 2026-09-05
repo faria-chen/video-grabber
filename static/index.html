@@ -424,10 +424,10 @@
                 const formData = new FormData();
                 formData.append('url', videoUrl);
 
-                const response = await fetch(API_BASE + '/api/grab', {
+                                const response = await fetch(API_BASE + '/api/grab', {
                     method: 'POST',
                     body: formData,
-                    signal: AbortSignal.timeout(30000),
+                    signal: AbortSignal.timeout(60000),
                 });
 
                 const data = await response.json();
@@ -462,8 +462,8 @@
                     showError(data.detail || '暂时无法抓取该视频，请检查链接是否正确');
                 }
             } catch (error) {
-                if (error.name === 'TimeoutError') {
-                    showError('请求超时，服务器可能正在冷启动，请30秒后重试', true);
+                                if (error.name === 'TimeoutError') {
+                    showError('请求超时（60秒），服务器可能正在冷启动，请刷新页面后重试', true);
                 } else {
                     showError('网络错误：' + error.message, true);
                 }
