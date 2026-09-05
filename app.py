@@ -21,6 +21,18 @@ import yt_dlp
 
 app = FastAPI(title="视频抓取器", docs_url=None, redoc_url=None)
 
+# 预热：启动时加载 yt-dlp，避免首次请求冷启动
+@app.on_event("startup")
+async def _warmup():
+    import threading
+    def _preimport():
+        try:
+            import yt_dlp
+            yt_dlp.YoutubeDL({"quiet": True}).params  # 触发完整加载
+        except Exception:
+            pass
+    threading.Thread(target=_preimport, daemon=True).start()
+
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
@@ -80,8 +92,9 @@ def get_ydl_opts(url: str, platform: Optional[str] = None) -> dict:
     base_opts = {
         "quiet": True,
         "no_warnings": True,
-        "socket_timeout": 30,
-        "retries": 3,
+        "socket_timeout": 15,
+        "retries": 2,
+        "fragment_retries": 2,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -124,6 +137,13 @@ async def health():
     return {"status": "ok", "service": "video-grabber"}
 
 
+@app.get("/api/warm")
+async def warm():
+    """预热端点：确保 yt-dlp 已加载到内存"""
+    import yt_dlp as _ydl  # noqa: F401
+    return {"status": "warmed", "engine": "yt-dlp"}
+
+
 @app.post("/api/grab")
 async def grab_video(request: Request):
     """
@@ -150,12 +170,16 @@ async def grab_video(request: Request):
     platform = detect_platform(url)
 
     try:
+        import time
+        t0 = time.time()
         ydl_opts = get_ydl_opts(url, platform)
         ydl_opts["skip_download"] = True
 
         # 在线程池中执行 yt-dlp（避免阻塞事件循环）
         loop = asyncio.get_event_loop()
         info = await loop.run_in_executor(None, _extract_info, url, ydl_opts)
+        elapsed = round(time.time() - t0, 2)
+        print(f"[grab] {platform or 'unknown'} extract took {elapsed}s")
 
         if info is None:
             raise HTTPException(status_code=404, detail="无法获取视频信息，请检查链接是否正确")
@@ -265,7 +289,7 @@ async def download_video(video_url: str, title: str = "video"):
     if not video_url:
         raise HTTPException(status_code=400, detail="缺少视频链接")
 
-        safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:100]
+    safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:100]
 
     try:
         async with httpx.AsyncClient(
