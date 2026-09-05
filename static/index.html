@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视频抓取器 - 免水印视频下载</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 60px;
+        }
+
+        .container { width: 100%; max-width: 520px; }
+
+        .card {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            padding: 40px 32px 32px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 1.8em;
+            text-align: center;
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #999;
+            text-align: center;
+            font-size: 0.9em;
+            margin-bottom: 24px;
+        }
+
+        /* 平台标签 */
+        .platforms {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 28px;
+        }
+
+        .platform {
+            padding: 5px 14px;
+            background: #f0f2f5;
+            border-radius: 20px;
+            font-size: 0.8em;
+            color: #555;
+            transition: all 0.2s;
+        }
+
+        .platform.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        /* 输入区域 */
+        .input-group {
+            margin-bottom: 16px;
+            position: relative;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 16px 48px 16px 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 14px;
+            font-size: 15px;
+            transition: all 0.3s;
+            background: #fafafa;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102,126,234,0.15);
+        }
+
+        .input-group input::placeholder { color: #bbb; }
+
+        .clear-btn {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            font-size: 18px;
+            color: #ccc;
+            cursor: pointer;
+            display: none;
+            padding: 4px;
+            line-height: 1;
+        }
+
+        .clear-btn:hover { color: #999; }
+        .clear-btn.show { display: block; }
+
+        /* 抓取按钮 */
+        .btn {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 17px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102,126,234,0.4);
+        }
+
+        .btn:active:not(:disabled) { transform: translateY(0); }
+
+        .btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        .btn.loading .spinner { display: inline-block; }
+        .btn.loading .btn-text { display: none; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* 结果区域 */
+        .result {
+            margin-top: 24px;
+            display: none;
+        }
+
+        .result.show { display: block; animation: fadeIn 0.3s ease; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .video-info {
+            background: #f8f9fa;
+            border-radius: 14px;
+            padding: 18px;
+            margin-bottom: 14px;
+        }
+
+        .video-info .platform-tag {
+            display: inline-block;
+            padding: 3px 10px;
+            background: #667eea;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.75em;
+            margin-bottom: 8px;
+        }
+
+        .video-info h3 {
+            color: #333;
+            font-size: 0.95em;
+            line-height: 1.5;
+            word-break: break-all;
+        }
+
+        .video-info .meta {
+            color: #999;
+            font-size: 0.8em;
+            margin-top: 6px;
+        }
+
+        .video-preview {
+            width: 100%;
+            border-radius: 12px;
+            margin-bottom: 14px;
+            background: #000;
+            max-height: 400px;
+        }
+
+        .download-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .download-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 14px;
+            background: #28a745;
+            color: white;
+            text-align: center;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.95em;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+        }
+
+        .download-btn:hover { background: #218838; transform: translateY(-1px); }
+
+        .download-btn.proxy {
+            background: #007bff;
+        }
+        .download-btn.proxy:hover { background: #0056b3; }
+
+        /* 错误提示 */
+        .error {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        .error-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .retry-btn {
+            display: inline-block;
+            margin-top: 10px;
+            padding: 8px 20px;
+            background: #ffc107;
+            color: #333;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .retry-btn:hover { background: #e0a800; }
+
+        /* 使用说明 */
+        .tips {
+            margin-top: 24px;
+            padding: 18px;
+            background: #f0f7ff;
+            border-radius: 14px;
+            font-size: 0.85em;
+            color: #444;
+        }
+
+        .tips h4 { color: #333; margin-bottom: 10px; font-size: 1em; }
+        .tips ul { padding-left: 18px; }
+        .tips li { margin-bottom: 5px; line-height: 1.5; }
+        .tips .supported { color: #667eea; font-weight: 600; }
+
+        /* 响应式 */
+        @media (max-width: 480px) {
+            body { padding: 12px; padding-top: 30px; }
+            .card { padding: 28px 20px 24px; border-radius: 20px; }
+            h1 { font-size: 1.5em; }
+            .download-actions { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>🎬 视频抓取器</h1>
+            <p class="subtitle">支持主流平台 · 免水印下载</p>
+
+            <div class="platforms" id="platforms">
+                <span class="platform" data-key="douyin">抖音</span>
+                <span class="platform" data-key="bilibili">B站</span>
+                <span class="platform" data-key="xiaohongshu">小红书</span>
+                <span class="platform" data-key="kuaishou">快手</span>
+                <span class="platform" data-key="youtube">YouTube</span>
+                <span class="platform" data-key="tiktok">TikTok</span>
+            </div>
+
+            <div class="input-group">
+                <input
+                    type="text"
+                    id="videoUrl"
+                    placeholder="粘贴视频链接到这里..."
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+                <button class="clear-btn" id="clearBtn" onclick="clearInput()">✕</button>
+            </div>
+
+            <button class="btn" id="grabBtn" onclick="grabVideo()">
+                <span class="spinner"></span>
+                <span class="btn-text">🔍 抓取视频</span>
+            </button>
+
+            <div class="result" id="result"></div>
+
+            <div class="tips">
+                <h4>📌 使用说明</h4>
+                <ul>
+                    <li>打开对应App → 复制视频链接</li>
+                    <li>粘贴到上方输入框 → 点击抓取</li>
+                    <li class="supported">支持：抖音、B站、小红书、快手、YouTube、TikTok、微博、Twitter/X、Instagram、Vimeo、Facebook</li>
+                    <li>💡 如遇跨域限制，点击「代理下载」按钮即可</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ─── API 地址（自动检测） ────────────────────────────────
+        const API_BASE = window.location.origin;
+
+        // ─── 平台关键词映射 ────────────────────────────────────
+        const PLATFORM_KEYWORDS = {
+            douyin: ['douyin.com', 'v.douyin.com'],
+            bilibili: ['bilibili.com', 'b23.tv'],
+            xiaohongshu: ['xiaohongshu.com', 'xhslink.com', 'xhs.com'],
+            kuaishou: ['kuaishou.com', 'v.kuaishou.com'],
+            youtube: ['youtube.com', 'youtu.be'],
+            tiktok: ['tiktok.com'],
+            twitter: ['twitter.com', 'x.com'],
+            instagram: ['instagram.com'],
+            weibo: ['weibo.com', 'm.weibo.cn'],
+            vimeo: ['vimeo.com'],
+            facebook: ['facebook.com', 'fb.watch'],
+        };
+
+        // ─── 状态变量 ────────────────────────────────────────
+        let currentResult = null;
+
+        // ─── 初始化 ────────────────────────────────────────────
+        const urlInput = document.getElementById('videoUrl');
+        const clearBtn = document.getElementById('clearBtn');
+
+        urlInput.addEventListener('input', function() {
+            clearBtn.classList.toggle('show', this.value.length > 0);
+            autoDetectPlatform(this.value);
+        });
+
+        urlInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') grabVideo();
+        });
+
+        // 支持粘贴自动抓取（用户粘贴链接后自动开始）
+        urlInput.addEventListener('paste', function(e) {
+            setTimeout(() => {
+                const val = urlInput.value.trim();
+                if (val && isUrl(val)) {
+                    // 短暂延迟让用户看到粘贴的内容
+                    setTimeout(() => grabVideo(), 300);
+                }
+            }, 50);
+        });
+
+        // ─── 核心函数 ──────────────────────────────────────────
+
+        function isUrl(text) {
+            return /^https?:\/\//i.test(text);
+        }
+
+        function autoDetectPlatform(url) {
+            const platforms = document.querySelectorAll('.platform');
+            let detected = false;
+
+            platforms.forEach(p => {
+                const key = p.dataset.key;
+                const keywords = PLATFORM_KEYWORDS[key] || [];
+                const match = keywords.some(kw => url.toLowerCase().includes(kw));
+                p.classList.toggle('active', match);
+                if (match) detected = true;
+            });
+
+            if (!detected) {
+                platforms.forEach(p => p.classList.remove('active'));
+            }
+        }
+
+        async function grabVideo() {
+            const url = urlInput.value.trim();
+            const btn = document.getElementById('grabBtn');
+
+            if (!url) {
+                showError('请输入视频链接');
+                return;
+            }
+
+            // 从粘贴内容中提取 URL
+            const urlMatch = url.match(/https?:\/\/[^\s<>"]+/);
+            const videoUrl = urlMatch ? urlMatch[0] : url;
+
+            btn.disabled = true;
+            btn.classList.add('loading');
+            showResult('<div class="loading" style="padding:30px;text-align:center;color:#888;">⏳ 正在解析视频，请稍候...</div>');
+
+            try {
+                const formData = new FormData();
+                formData.append('url', videoUrl);
+
+                const response = await fetch(API_BASE + '/api/grab', {
+                    method: 'POST',
+                    body: formData,
+                    signal: AbortSignal.timeout(30000),
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.video_url) {
+                    currentResult = data;
+                    const durationStr = data.duration ? formatDuration(data.duration) : '';
+                    const metaStr = [data.platform, data.format_info, durationStr].filter(Boolean).join(' · ');
+
+                    showResult(`
+                        <div class="video-info">
+                            <span class="platform-tag">${escapeHtml(data.platform || '未知')}</span>
+                            <h3>${escapeHtml(data.title || '视频抓取成功')}</h3>
+                            <div class="meta">${escapeHtml(metaStr)}</div>
+                        </div>
+                        <video class="video-preview" controls preload="metadata"
+                            ${data.thumbnail ? `poster="${escapeHtml(data.thumbnail)}"` : ''}>
+                            <source src="${escapeHtml(data.video_url)}" type="video/mp4">
+                        </video>
+                        <div class="download-actions">
+                            <a class="download-btn" href="${escapeHtml(data.video_url)}"
+                               download="${escapeHtml(data.title || 'video')}.mp4"
+                               target="_blank">
+                                ⬇️ 直接下载
+                            </a>
+                            <button class="download-btn proxy" onclick="proxyDownload()">
+                                🔄 代理下载
+                            </button>
+                        </div>
+                    `);
+                } else {
+                    showError(data.detail || '暂时无法抓取该视频，请检查链接是否正确');
+                }
+            } catch (error) {
+                if (error.name === 'TimeoutError') {
+                    showError('请求超时，服务器可能正在冷启动，请30秒后重试', true);
+                } else {
+                    showError('网络错误：' + error.message, true);
+                }
+            }
+
+            btn.disabled = false;
+            btn.classList.remove('loading');
+        }
+
+        function proxyDownload() {
+            if (!currentResult) return;
+            const url = `${API_BASE}/api/download?video_url=${encodeURIComponent(currentResult.video_url)}&title=${encodeURIComponent(currentResult.title || 'video')}`;
+            window.open(url, '_blank');
+        }
+
+        function showError(msg, showRetry = false) {
+            showResult(`
+                <div class="error">
+                    <div class="error-title">⚠️ 提示</div>
+                    <div>${escapeHtml(msg)}</div>
+                    ${showRetry ? '<button class="retry-btn" onclick="grabVideo()">🔄 重试</button>' : ''}
+                </div>
+            `);
+        }
+
+        function showResult(html) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = html;
+            resultDiv.classList.add('show');
+        }
+
+        function clearInput() {
+            urlInput.value = '';
+            clearBtn.classList.remove('show');
+            document.querySelectorAll('.platform').forEach(p => p.classList.remove('active'));
+            currentResult = null;
+            document.getElementById('result').classList.remove('show');
+            urlInput.focus();
+        }
+
+        // ─── 工具函数 ──────────────────────────────────────────
+
+        function formatDuration(seconds) {
+            if (!seconds) return '';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+            return `${m}:${String(s).padStart(2,'0')}`;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

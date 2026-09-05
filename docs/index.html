@@ -3,151 +3,468 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>视频抓取器 - 无水印视频下载</title>
+    <title>视频抓取器 - 免水印视频下载</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎬</text></svg>">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
+            padding-top: 60px;
         }
-        .container { width: 100%; max-width: 500px; }
+
+        .container { width: 100%; max-width: 520px; }
+
         .card {
             background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            padding: 40px 32px 32px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 1.8em;
+            text-align: center;
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            color: #999;
+            text-align: center;
+            font-size: 0.9em;
+            margin-bottom: 24px;
+        }
+
+        .platforms {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 28px;
+        }
+
+        .platform {
+            padding: 5px 14px;
+            background: #f0f2f5;
             border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-            padding: 40px 30px;
+            font-size: 0.8em;
+            color: #555;
+            transition: all 0.2s;
         }
-        h1 { color: #333; font-size: 2em; text-align: center; margin-bottom: 8px; }
-        .subtitle { color: #999; text-align: center; font-size: 0.95em; margin-bottom: 30px; }
-        .platforms { display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; }
-        .platform { padding: 6px 16px; background: #f0f0f0; border-radius: 20px; font-size: 0.85em; color: #666; }
-        .input-group { margin-bottom: 20px; }
+
+        .platform.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .input-group {
+            margin-bottom: 16px;
+            position: relative;
+        }
+
         .input-group input {
-            width: 100%; padding: 16px; border: 2px solid #e0e0e0; border-radius: 12px; font-size: 16px; transition: all 0.3s;
+            width: 100%;
+            padding: 16px 48px 16px 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 14px;
+            font-size: 15px;
+            transition: all 0.3s;
+            background: #fafafa;
         }
-        .input-group input:focus { outline: none; border-color: #667eea; }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102,126,234,0.15);
+        }
+
+        .input-group input::placeholder { color: #bbb; }
+
+        .clear-btn {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            font-size: 18px;
+            color: #ccc;
+            cursor: pointer;
+            display: none;
+            padding: 4px;
+            line-height: 1;
+        }
+
+        .clear-btn:hover { color: #999; }
+        .clear-btn.show { display: block; }
+
         .btn {
-            width: 100%; padding: 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; border-radius: 12px; font-size: 18px; font-weight: 600; cursor: pointer; transition: all 0.3s;
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 14px;
+            font-size: 17px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
         }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(102,126,234,0.4); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-        .result { margin-top: 25px; display: none; }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102,126,234,0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        .btn.loading .spinner { display: inline-block; }
+        .btn.loading .btn-text { opacity: 0.8; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .result {
+            margin-top: 20px;
+            display: none;
+        }
+
         .result.show { display: block; }
-        .video-info { background: #f8f9fa; border-radius: 12px; padding: 20px; margin-bottom: 15px; }
-        .video-info h3 { color: #333; font-size: 1em; margin-bottom: 10px; word-break: break-all; }
-        .video-preview { width: 100%; border-radius: 10px; margin-bottom: 15px; background: #000; }
+
+        .result-card {
+            background: #f8f9fa;
+            border-radius: 16px;
+            padding: 20px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .result-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .result-badge {
+            padding: 3px 10px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .result-title {
+            color: #333;
+            font-size: 0.95em;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .video-preview {
+            width: 100%;
+            border-radius: 12px;
+            margin-bottom: 14px;
+            background: #000;
+            max-height: 400px;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 10px;
+        }
+
         .download-btn {
-            display: block; width: 100%; padding: 14px; background: #28a745; color: white;
-            text-align: center; border-radius: 10px; text-decoration: none; font-weight: 600; transition: all 0.3s;
+            flex: 1;
+            display: block;
+            padding: 14px;
+            background: #28a745;
+            color: white;
+            text-align: center;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 15px;
+            transition: all 0.2s;
         }
-        .download-btn:hover { background: #218838; }
-        .error { background: #fff3cd; border: 1px solid #ffc107; color: #856404; padding: 15px; border-radius: 10px; text-align: center; }
-        .loading { text-align: center; color: #666; padding: 20px; }
+
+        .download-btn:hover { background: #218838; transform: translateY(-1px); }
+
+        .preview-btn {
+            padding: 14px 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .preview-btn:hover { background: #5a6268; }
+
+        .error-box {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            color: #856404;
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 0.9em;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .error-box.danger {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+
+        .cold-start-hint {
+            background: #e8f4fd;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+            padding: 14px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 0.85em;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .cold-start-hint .dots::after {
+            content: '';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%   { content: ''; }
+            25%  { content: '.'; }
+            50%  { content: '..'; }
+            75%  { content: '...'; }
+            100% { content: ''; }
+        }
+
         .tips {
-            margin-top: 20px; padding: 15px; background: #e8f4fd; border-radius: 10px; font-size: 0.85em; color: #0c5460;
+            margin-top: 20px;
+            padding: 16px;
+            background: linear-gradient(135deg, #f0f7ff 0%, #f5f0ff 100%);
+            border-radius: 14px;
+            font-size: 0.82em;
+            color: #555;
+            line-height: 1.7;
         }
-        .tips h4 { margin-bottom: 8px; }
-        .tips ul { padding-left: 20px; }
-        .tips li { margin-bottom: 4px; }
+
+        .tips h4 {
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 0.95em;
+        }
+
+        .tips ul { padding-left: 18px; }
+        .tips li { margin-bottom: 3px; }
+
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: rgba(255,255,255,0.6);
+            font-size: 0.8em;
+        }
+
+        .footer a { color: rgba(255,255,255,0.8); text-decoration: none; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="card">
-            <h1>✨ 视频抓取器</h1>
-            <p class="subtitle">微信视频号 | 抖音 | 小红书</p>
-            
-            <div class="platforms">
-                <span class="platform">微信视频号</span>
-                <span class="platform">抖音</span>
-                <span class="platform">小红书</span>
+            <h1>🎬 视频抓取器</h1>
+            <p class="subtitle">免水印 · 多平台 · 免费使用</p>
+
+            <div class="platforms" id="platformTags">
+                <span class="platform" data-key="douyin">抖音</span>
+                <span class="platform" data-key="bilibili">B站</span>
+                <span class="platform" data-key="xiaohongshu">小红书</span>
+                <span class="platform" data-key="kuaishou">快手</span>
+                <span class="platform" data-key="youtube">YouTube</span>
+                <span class="platform" data-key="tiktok">TikTok</span>
+                <span class="platform" data-key="weibo">微博</span>
+                <span class="platform" data-key="twitter">X</span>
             </div>
-            
+
             <div class="input-group">
-                <input type="text" id="videoUrl" placeholder="粘贴视频分享链接..." autocomplete="off">
+                <input type="text" id="videoUrl" placeholder="粘贴视频链接，自动识别平台..." autocomplete="off" spellcheck="false">
+                <button class="clear-btn" id="clearBtn" onclick="clearInput()">✕</button>
             </div>
-            
+
             <button class="btn" id="grabBtn" onclick="grabVideo()">
-                抓取视频
+                <span class="spinner"></span>
+                <span class="btn-text">抓取视频</span>
             </button>
-            
+
             <div class="result" id="result"></div>
-            
+
             <div class="tips">
-                <h4>使用说明</h4>
+                <h4>💡 使用方法</h4>
                 <ul>
-                    <li>打开对应App → 点击分享 → 复制链接</li>
-                    <li>粘贴到上方输入框 → 点击抓取</li>
-                    <li>支持微信视频号、抖音、小红书</li>
+                    <li>打开 App → 分享 → 复制链接 → 粘贴到这里</li>
+                    <li>支持：抖音、B站、小红书、快手、YouTube、TikTok、微博、X/Twitter</li>
+                    <li>自动识别平台，无需手动选择</li>
+                    <li>首次访问后端可能需要等待 30 秒冷启动</li>
                 </ul>
             </div>
         </div>
-    </div>
-    
-    <script>
-        // 后端 API 地址（Render 部署后改成你的地址）
-        const API_BASE = 'https://video-grabber.onrender.com';
 
-        document.getElementById('videoUrl').addEventListener('keypress', function(e) {
+        <p class="footer">Powered by <a href="https://github.com/faria-chen/video-grabber">VideoGrabber</a> · yt-dlp</p>
+    </div>
+
+    <script>
+        const API_BASE = 'https://video-grabber-zrbg.onrender.com';
+
+        const PLATFORM_KEYWORDS = {
+            douyin: ['douyin', 'iesdouyin'],
+            bilibili: ['bilibili', 'b23.tv'],
+            xiaohongshu: ['xiaohongshu', 'xhslink', 'xhs.'],
+            kuaishou: ['kuaishou'],
+            youtube: ['youtube', 'youtu.be'],
+            tiktok: ['tiktok'],
+            weibo: ['weibo'],
+            twitter: ['twitter', 'x.com'],
+        };
+
+        const input = document.getElementById('videoUrl');
+        const clearBtn = document.getElementById('clearBtn');
+
+        input.addEventListener('input', function() {
+            clearBtn.classList.toggle('show', this.value.length > 0);
+            detectPlatform(this.value);
+        });
+
+        input.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') grabVideo();
         });
-        
+
+        function clearInput() {
+            input.value = '';
+            clearBtn.classList.remove('show');
+            document.querySelectorAll('.platform').forEach(p => p.classList.remove('active'));
+            document.getElementById('result').classList.remove('show');
+            input.focus();
+        }
+
+        function detectPlatform(url) {
+            const lower = url.toLowerCase();
+            document.querySelectorAll('.platform').forEach(p => p.classList.remove('active'));
+
+            for (const [key, keywords] of Object.entries(PLATFORM_KEYWORDS)) {
+                if (keywords.some(kw => lower.includes(kw))) {
+                    const tag = document.querySelector(`.platform[data-key="${key}"]`);
+                    if (tag) tag.classList.add('active');
+                    return;
+                }
+            }
+        }
+
         async function grabVideo() {
-            const url = document.getElementById('videoUrl').value.trim();
+            const url = input.value.trim();
             const btn = document.getElementById('grabBtn');
-            
+            const result = document.getElementById('result');
+
             if (!url) {
-                showResult('<div class="error">请输入视频链接</div>');
+                result.innerHTML = '<div class="error-box">请输入视频链接</div>';
+                result.classList.add('show');
                 return;
             }
-            
+
             btn.disabled = true;
-            btn.textContent = '抓取中...';
-            showResult('<div class="loading">⏳ 正在解析视频，请稍候...</div>');
-            
+            btn.classList.add('loading');
+            result.innerHTML = '<div class="cold-start-hint">⏳ 正在解析视频<span class="dots"></span><br>首次访问需等待后端冷启动（约30秒）</div>';
+            result.classList.add('show');
+
             try {
                 const formData = new FormData();
                 formData.append('url', url);
-                formData.append('platform', 'auto');
-                
+
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 90000);
+
                 const response = await fetch(API_BASE + '/api/grab', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: controller.signal,
                 });
-                
+
+                clearTimeout(timeoutId);
                 const data = await response.json();
-                
+
                 if (response.ok && data.video_url) {
-                    showResult(`
-                        <div class="video-info">
-                            <h3>✅ ${data.title || '视频抓取成功'}</h3>
+                    const platform = data.platform || '';
+                    const duration = data.duration ? ` · ${Math.round(data.duration)}s` : '';
+                    const formatInfo = data.format_info ? ` · ${data.format_info}` : '';
+
+                    result.innerHTML = `
+                        <div class="result-card">
+                            <div class="result-header">
+                                ${platform ? `<span class="result-badge">${platform}</span>` : ''}
+                                <span class="result-title" title="${data.title}">${data.title || '视频抓取成功'}</span>
+                            </div>
+                            <video class="video-preview" controls preload="metadata" src="${data.video_url}"></video>
+                            <div class="action-row">
+                                <a class="download-btn" href="${API_BASE}/api/download?video_url=${encodeURIComponent(data.video_url)}&title=${encodeURIComponent(data.title || 'video')}">
+                                    ⬇ 下载视频${formatInfo}
+                                </a>
+                            </div>
                         </div>
-                        <video class="video-preview" controls src="${data.video_url}"></video>
-                        <a class="download-btn" href="${API_BASE}/api/download?video_url=${encodeURIComponent(data.video_url)}&title=${encodeURIComponent(data.title || 'video')}">
-                            ⬇️ 下载视频
-                        </a>
-                    `);
+                    `;
                 } else {
-                    showResult('<div class="error">' + (data.detail || '暂时无法抓取该视频，请检查链接是否正确') + '</div>');
+                    const errMsg = data.detail || data.error || '暂时无法抓取该视频';
+                    result.innerHTML = `<div class="error-box danger">❌ ${errMsg}</div>`;
                 }
-            } catch (error) {
-                showResult('<div class="error">⚠️ 后端服务未启动，请先在 Render 部署后端<br><br>错误: ' + error.message + '</div>');
+            } catch (err) {
+                let msg = err.message;
+                if (err.name === 'AbortError') {
+                    msg = '请求超时（90秒），后端冷启动可能还在进行中，请刷新页面重试';
+                } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+                    msg = '⚠️ 后端服务未启动，请先部署后端到 Render.com';
+                }
+                result.innerHTML = `<div class="error-box danger">❌ ${msg}</div>`;
             }
-            
+
             btn.disabled = false;
-            btn.textContent = '抓取视频';
-        }
-        
-        function showResult(html) {
-            const resultDiv = document.getElementById('result');
-            resultDiv.innerHTML = html;
-            resultDiv.classList.add('show');
+            btn.classList.remove('loading');
         }
     </script>
 </body>

@@ -1,448 +1,317 @@
 """
-视频抓取器 - 无水印视频下载工具
-支持: 微信视频号 | 抖音 | 小红书
+视频抓取器后端 - 支持抖音/B站/小红书/YouTube/快手等主流平台
+基于 FastAPI + yt-dlp
 """
 
 import os
 import re
 import json
 import asyncio
-import logging
-from datetime import datetime
+import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from urllib.parse import urlparse, unquote
+from typing import Optional
 
-import uvicorn
-from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from playwright.async_api import async_playwright
+import yt_dlp
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+app = FastAPI(title="视频抓取器", docs_url=None, redoc_url=None)
 
-# 创建FastAPI应用
-app = FastAPI(title="视频抓取器", version="1.0.0")
-
-# CORS - 允许前端跨域调用
+# CORS 配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 创建目录
-UPLOAD_DIR = Path("downloads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+# 静态文件
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-# 模板和静态文件
-templates = Jinja2Templates(directory="templates")
+# ─── 平台识别 ────────────────────────────────────────────────────────
+PLATFORM_PATTERNS = {
+    "douyin": [r"douyin\.com", r"v\.douyin\.com"],
+    "bilibili": [r"bilibili\.com", r"b23\.tv"],
+    "xiaohongshu": [r"xiaohongshu\.com", r"xhslink\.com", r"xhs\.com"],
+    "kuaishou": [r"kuaishou\.com", r"v\.kuaishou\.com"],
+    "tiktok": [r"tiktok\.com"],
+    "youtube": [r"youtube\.com", r"youtu\.be"],
+    "twitter": [r"twitter\.com", r"x\.com"],
+    "instagram": [r"instagram\.com"],
+    "weibo": [r"weibo\.com", r"m\.weibo\.cn"],
+    "vimeo": [r"vimeo\.com"],
+    "facebook": [r"facebook\.com", r"fb\.watch"],
+}
 
-# 浏览器池
-browser_pool = None
+PLATFORM_NAMES = {
+    "douyin": "抖音",
+    "bilibili": "B站",
+    "xiaohongshu": "小红书",
+    "kuaishou": "快手",
+    "tiktok": "TikTok",
+    "youtube": "YouTube",
+    "twitter": "X/Twitter",
+    "instagram": "Instagram",
+    "weibo": "微博",
+    "vimeo": "Vimeo",
+    "facebook": "Facebook",
+}
 
 
-class VideoGrabber:
-    """视频抓取器核心类"""
-    
-    def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        }
-    
-    async def grab_video(self, url: str, platform: str = None) -> Dict[str, Any]:
-        """
-        抓取视频
-        
-        Args:
-            url: 视频链接
-            platform: 平台类型 (wechat/douyin/xiaohongshu/auto)
-            
-        Returns:
-            包含视频信息的字典
-        """
-        # 自动识别平台
-        if platform == 'auto' or not platform:
-            platform = self._detect_platform(url)
-        
-        logger.info(f"检测到平台: {platform}, URL: {url}")
-        
-        try:
-            if platform == 'wechat':
-                return await self._grab_wechat(url)
-            elif platform == 'douyin':
-                return await self._grab_douyin(url)
-            elif platform == 'xiaohongshu':
-                return await self._grab_xiaohongshu(url)
-            else:
-                return {'success': False, 'error': f'不支持的平台: {platform}'}
-        except Exception as e:
-            logger.error(f"抓取失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-    
-    def _detect_platform(self, url: str) -> str:
-        """自动检测平台"""
-        url_lower = url.lower()
-        
-        if 'weixin.qq.com' in url_lower or 'channels' in url_lower:
-            return 'wechat'
-        elif 'douyin.com' in url_lower or 'iesdouyin.com' in url_lower:
-            return 'douyin'
-        elif 'xiaohongshu.com' in url_lower or 'xhslink.com' in url_lower:
-            return 'xiaohongshu'
-        else:
-            return 'unknown'
-    
-    async def _grab_wechat(self, url: str) -> Dict[str, Any]:
-        """抓取微信视频号"""
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent=self.headers['User-Agent'],
-                    viewport={'width': 1920, 'height': 1080}
-                )
-                page = await context.new_page()
-                
-                # 存储视频URL
-                video_urls = []
-                
-                # 监听网络请求
-                async def handle_response(response):
-                    content_type = response.headers.get('content-type', '')
-                    if 'video' in content_type or response.url.endswith('.mp4'):
-                        video_urls.append(response.url)
-                
-                page.on('response', handle_response)
-                
-                # 访问页面
-                await page.goto(url, wait_until='networkidle', timeout=30000)
-                await asyncio.sleep(3)
-                
-                # 获取标题
-                title = await page.title()
-                
-                # 尝试点击播放
-                try:
-                    play_btn = await page.query_selector('[class*="play"], .video-play-btn')
-                    if play_btn:
-                        await play_btn.click()
-                        await asyncio.sleep(2)
-                except:
-                    pass
-                
-                # 从页面提取视频URL
-                page_content = await page.content()
-                
-                # 正则匹配视频URL
-                patterns = [
-                    r'"url"\s*:\s*"(https?://[^"]*\.mp4[^"]*)"',
-                    r'"video_url"\s*:\s*"(https?://[^"]*)"',
-                    r'https?://wxvideo[^"]*\.mp4[^\s"]*',
-                    r'https?://[^"]*video[^"]*\.mp4[^\s"]*',
-                ]
-                
-                for pattern in patterns:
-                    matches = re.findall(pattern, page_content)
-                    for match in matches:
-                        if isinstance(match, tuple):
-                            match = match[0]
-                        if match.startswith('http') and match not in video_urls:
-                            video_urls.append(match)
-                
-                await browser.close()
-                
-                if video_urls:
-                    # 选择最佳视频URL
-                    video_url = self._select_best_video(video_urls)
-                    return {
-                        'success': True,
-                        'title': title or f'微信视频_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
-                        'url': url,
-                        'video_url': video_url,
-                        'platform': 'wechat',
-                        'watermark': False
-                    }
-                else:
-                    return {'success': False, 'error': '未找到视频资源'}
-                    
-        except Exception as e:
-            return {'success': False, 'error': f'微信视频号抓取失败: {str(e)}'}
-    
-    async def _grab_douyin(self, url: str) -> Dict[str, Any]:
-        """抓取抖音视频（去除水印）"""
-        try:
-            # 抖音分享链接通常需要先解析重定向
-            async with httpx.AsyncClient() as client:
-                # 处理短链接
-                if 'v.douyin.com' in url:
-                    resp = await client.get(url, follow_redirects=True, headers=self.headers)
-                    url = str(resp.url)
-                
-                # 提取视频ID
-                video_id = self._extract_douyin_id(url)
-                
-                if not video_id:
-                    return {'success': False, 'error': '无法提取视频ID'}
-                
-                # 构造无水印URL
-                # 抖音无水印视频API
-                api_url = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
-                
-                resp = await client.get(api_url, headers=self.headers)
-                data = resp.json()
-                
-                if data.get('item_list'):
-                    item = data['item_list'][0]
-                    video_info = item.get('video', {})
-                    
-                    # 获取无水印URL
-                    play_addr = video_info.get('play_addr', {})
-                    video_url = play_addr.get('url_list', [None])[0]
-                    
-                    # 替换水印域名
-                    if video_url:
-                        video_url = video_url.replace('playwm', 'play')
-                    
-                    return {
-                        'success': True,
-                        'title': item.get('desc', f'抖音视频_{datetime.now().strftime("%Y%m%d_%H%M%S")}'),
-                        'url': url,
-                        'video_url': video_url,
-                        'platform': 'douyin',
-                        'watermark': False,
-                        'author': item.get('author', {}).get('nickname', ''),
-                        'duration': video_info.get('duration', 0)
-                    }
-                
-                return {'success': False, 'error': '未找到视频信息'}
-                
-        except Exception as e:
-            return {'success': False, 'error': f'抖音视频抓取失败: {str(e)}'}
-    
-    def _extract_douyin_id(self, url: str) -> Optional[str]:
-        """提取抖音视频ID"""
-        patterns = [
-            r'/video/(\d+)',
-            r'/note/(\d+)',
-            r'item_ids=(\d+)',
-            r'modal_id=(\d+)',
-        ]
-        
+def detect_platform(url: str) -> Optional[str]:
+    """自动识别视频平台"""
+    for platform, patterns in PLATFORM_PATTERNS.items():
         for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-    
-    async def _grab_xiaohongshu(self, url: str) -> Dict[str, Any]:
-        """抓取小红书视频（去除水印）"""
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent=self.headers['User-Agent']
-                )
-                page = await context.new_page()
-                
-                # 存储视频URL
-                video_urls = []
-                
-                # 监听网络请求
-                async def handle_response(response):
-                    content_type = response.headers.get('content-type', '')
-                    url = response.url
-                    if ('video' in content_type or 
-                        '.mp4' in url or 
-                        'sns-video' in url or
-                        'xhscdn' in url):
-                        if url.startswith('http'):
-                            video_urls.append(url)
-                
-                page.on('response', handle_response)
-                
-                # 处理短链接
-                if 'xhslink.com' in url:
-                    resp = await page.goto(url, wait_until='networkidle', timeout=30000)
-                    url = page.url
-                
-                # 访问页面
-                await page.goto(url, wait_until='networkidle', timeout=30000)
-                await asyncio.sleep(3)
-                
-                # 获取标题
-                title = ''
-                try:
-                    title_elem = await page.query_selector('.title, [class*="title"], #detail-title')
-                    if title_elem:
-                        title = await title_elem.inner_text()
-                except:
-                    pass
-                
-                if not title:
-                    title = await page.title()
-                
-                # 尝试点击播放
-                try:
-                    play_btn = await page.query_selector('[class*="play"], .play-btn')
-                    if play_btn:
-                        await play_btn.click()
-                        await asyncio.sleep(2)
-                except:
-                    pass
-                
-                # 从页面源码提取
-                page_content = await page.content()
-                
-                # 正则匹配
-                patterns = [
-                    r'"originVideoKey"\s*:\s*"([^"]+)"',
-                    r'"videoUrl"\s*:\s*"([^"]+)"',
-                    r'https?://sns-video[^"]*\.mp4[^\s"]*',
-                    r'https?://[^"]*xhscdn[^"]*video[^"]*\.mp4[^\s"]*',
-                ]
-                
-                for pattern in patterns:
-                    matches = re.findall(pattern, page_content)
-                    for match in matches:
-                        if match.startswith('http') and match not in video_urls:
-                            video_urls.append(match)
-                        elif not match.startswith('http'):
-                            # 可能是key，构造URL
-                            video_url = f"https://sns-video/{match}"
-                            if video_url not in video_urls:
-                                video_urls.append(video_url)
-                
-                await browser.close()
-                
-                if video_urls:
-                    # 选择最佳视频
-                    video_url = self._select_best_video(video_urls)
-                    
-                    # 清理URL中的水印参数
-                    video_url = self._remove_watermark(video_url)
-                    
-                    return {
-                        'success': True,
-                        'title': title or f'小红书视频_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
-                        'url': url,
-                        'video_url': video_url,
-                        'platform': 'xiaohongshu',
-                        'watermark': False
-                    }
-                else:
-                    return {'success': False, 'error': '未找到视频资源'}
-                    
-        except Exception as e:
-            return {'success': False, 'error': f'小红书视频抓取失败: {str(e)}'}
-    
-    def _select_best_video(self, urls: list) -> str:
-        """选择最佳视频URL"""
-        if not urls:
-            return ''
-        
-        # 优先选择无水印的URL
-        for url in urls:
-            if 'playwm' not in url and 'watermark' not in url.lower():
-                return url
-        
-        # 否则返回第一个
-        return urls[0]
-    
-    def _remove_watermark(self, url: str) -> str:
-        """移除URL中的水印参数"""
-        # 移除常见的水印参数
-        url = re.sub(r'[?&]watermark=[^&]*', '', url)
-        url = re.sub(r'[?&]wm=[^&]*', '', url)
-        url = url.replace('playwm', 'play')
-        return url
+            if re.search(pattern, url, re.IGNORECASE):
+                return platform
+    return None
 
 
-# 全局抓取器实例
-grabber = VideoGrabber()
+# ─── yt-dlp 配置 ──────────────────────────────────────────────────────
 
+def get_ydl_opts(url: str, platform: Optional[str] = None) -> dict:
+    """根据平台返回 yt-dlp 配置"""
+    base_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 30,
+        "retries": 3,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.google.com/",
+        },
+    }
+
+    # 平台特定配置
+    if platform == "douyin":
+        base_opts["http_headers"]["Cookie"] = ""
+    elif platform == "bilibili":
+        base_opts["http_headers"]["Referer"] = "https://www.bilibili.com/"
+    elif platform == "xiaohongshu":
+        base_opts["http_headers"]["Referer"] = "https://www.xiaohongshu.com/"
+    elif platform == "youtube":
+        base_opts["format"] = "best[height<=1080]/best"
+    elif platform == "kuaishou":
+        base_opts["http_headers"]["Referer"] = "https://www.kuaishou.com/"
+
+    return base_opts
+
+
+# ─── API 路由 ──────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """主页"""
-    return templates.TemplateResponse("index.html", {"request": request})
+async def index():
+    """前端页面"""
+    index_file = static_dir / "index.html"
+    if index_file.exists():
+        return HTMLResponse(content=index_file.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>视频抓取器</h1><p>请将 index.html 放到 static/ 目录</p>")
+
+
+@app.get("/api/health")
+async def health():
+    """健康检查"""
+    return {"status": "ok", "service": "video-grabber"}
 
 
 @app.post("/api/grab")
-async def grab_video(
-    url: str = Form(...),
-    platform: str = Form("auto")
-):
+async def grab_video(request: Request):
     """
-    抓取视频API
-    
-    Args:
-        url: 视频链接
-        platform: 平台类型 (auto/wechat/douyin/xiaohongshu)
+    抓取视频信息
+    兼容旧前端的 FormData 格式，也支持 JSON
     """
-    if not url:
-        raise HTTPException(status_code=400, detail="URL不能为空")
-    
-    # 验证URL
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-    
-    result = await grabber.grab_video(url, platform)
-    
-    if result['success']:
-        return JSONResponse(content=result)
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        body = await request.json()
+        url = body.get("url", "").strip()
     else:
-        raise HTTPException(status_code=400, detail=result['error'])
+        form = await request.form()
+        url = form.get("url", "").strip()
+
+    if not url:
+        raise HTTPException(status_code=400, detail="请提供视频链接")
+
+    # 尝试提取 URL（用户可能粘贴了带文字的内容）
+    url_match = re.search(r'https?://[^\s<>"]+', url)
+    if url_match:
+        url = url_match.group(0)
+
+    platform = detect_platform(url)
+
+    try:
+        ydl_opts = get_ydl_opts(url, platform)
+        ydl_opts["skip_download"] = True
+
+        # 在线程池中执行 yt-dlp（避免阻塞事件循环）
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, _extract_info, url, ydl_opts)
+
+        if info is None:
+            raise HTTPException(status_code=404, detail="无法获取视频信息，请检查链接是否正确")
+
+        # 选择最佳格式
+        formats = info.get("formats", [])
+        best_url = None
+        best_format = None
+
+        # 优先选 MP4 视频
+        video_formats = [
+            f for f in formats
+            if f.get("vcodec") != "none"
+            and f.get("acodec") != "none"
+            and f.get("url")
+        ]
+
+        if video_formats:
+            # 按分辨率排序，选最高
+            video_formats.sort(
+                key=lambda f: f.get("height", 0) or 0, reverse=True
+            )
+            # 限制最高 1080p
+            for vf in video_formats:
+                h = vf.get("height", 0) or 0
+                if h <= 1080:
+                    best_url = vf["url"]
+                    best_format = vf
+                    break
+            if not best_url and video_formats:
+                best_url = video_formats[-1]["url"]
+                best_format = video_formats[-1]
+
+        # 如果没有合并格式，尝试合并视频+音频
+        if not best_url:
+            # 纯视频
+            vid_fmts = [
+                f for f in formats
+                if f.get("vcodec") != "none" and f.get("acodec") == "none" and f.get("url")
+            ]
+            # 纯音频
+            aud_fmts = [
+                f for f in formats
+                if f.get("vcodec") == "none" and f.get("acodec") != "none" and f.get("url")
+            ]
+            if vid_fmts:
+                vid_fmts.sort(key=lambda f: f.get("height", 0) or 0, reverse=True)
+                best_url = vid_fmts[0]["url"]
+                best_format = vid_fmts[0]
+
+        if not best_url:
+            # 最后手段：任何有 URL 的格式
+            for f in formats:
+                if f.get("url"):
+                    best_url = f["url"]
+                    best_format = f
+                    break
+
+        if not best_url:
+            raise HTTPException(
+                status_code=404,
+                detail="未找到可下载的视频格式，可能是私密视频或平台限制"
+            )
+
+        title = info.get("title", "视频抓取成功")
+        thumbnail = info.get("thumbnail", "")
+        duration = info.get("duration")
+        platform_name = PLATFORM_NAMES.get(platform, "未知平台")
+
+        return {
+            "title": title,
+            "video_url": best_url,
+            "thumbnail": thumbnail,
+            "platform": platform_name,
+            "duration": duration,
+            "format_info": f"{best_format.get('format_note', '')} {best_format.get('resolution', '')}".strip(),
+        }
+
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        if "Unable to extract" in error_msg:
+            detail = "无法解析该链接，可能平台暂不支持或链接已失效"
+        elif "Private video" in error_msg or "私密" in error_msg:
+            detail = "该视频为私密视频，无法抓取"
+        elif "Sign in" in error_msg:
+            detail = "该视频需要登录才能访问"
+        else:
+            detail = f"抓取失败: {error_msg[:200]}"
+        raise HTTPException(status_code=400, detail=detail)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"服务器错误: {str(e)[:200]}")
+
+
+def _extract_info(url: str, opts: dict):
+    """同步提取视频信息"""
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        return ydl.extract_info(url, download=False)
 
 
 @app.get("/api/download")
 async def download_video(video_url: str, title: str = "video"):
     """
-    下载视频
-    
-    Args:
-        video_url: 视频URL
-        title: 视频标题
+    代理下载视频（解决浏览器跨域问题）
     """
+    if not video_url:
+        raise HTTPException(status_code=400, detail="缺少视频链接")
+
+        safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:100]
+
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(video_url, headers=grabber.headers)
-            
-            if resp.status_code == 200:
-                # 保存文件
-                filename = f"{title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-                filepath = UPLOAD_DIR / filename
-                
-                with open(filepath, "wb") as f:
-                    f.write(resp.content)
-                
-                return FileResponse(
-                    path=filepath,
-                    filename=filename,
-                    media_type="video/mp4"
+        async with httpx.AsyncClient(
+            timeout=60,
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+            },
+        ) as client:
+            response = await client.get(video_url)
+
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"视频源返回错误: {response.status_code}"
                 )
-            else:
-                raise HTTPException(status_code=400, detail="下载失败")
-                
+
+            content_type = response.headers.get("content-type", "video/mp4")
+            content_length = response.headers.get("content-length")
+
+            headers = {
+                "Content-Disposition": f'attachment; filename="{safe_title}.mp4"',
+            }
+            if content_length:
+                headers["Content-Length"] = content_length
+
+            return HTMLResponse(
+                content=response.content,
+                media_type=content_type,
+                headers=headers,
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="视频下载超时，请稍后重试")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)[:200]}")
 
 
-@app.get("/api/health")
-async def health_check():
-    """健康检查"""
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
-
+# ─── 入口 ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("视频抓取器启动中...")
-    print("访问 http://localhost:8089 使用")
-    uvicorn.run(app, host="0.0.0.0", port=8089)
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
