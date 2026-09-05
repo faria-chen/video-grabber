@@ -295,7 +295,7 @@ def _extract_info(url: str, opts: dict):
 
 
 @app.get("/api/download")
-async def download_video(video_url: str, title: str = "video"):
+async def download_video(video_url: str, title: str = "video", inline: bool = False):
     """
     代理下载视频（解决浏览器跨域问题）
     """
@@ -327,8 +327,11 @@ async def download_video(video_url: str, title: str = "video"):
             content_type = response.headers.get("content-type", "video/mp4")
             content_length = response.headers.get("content-length")
 
+            from urllib.parse import quote
+            disp_type = "inline" if inline else "attachment"
+            filename_star = quote(f"{safe_title}.mp4")
             headers = {
-                "Content-Disposition": f'attachment; filename="{safe_title}.mp4"',
+                "Content-Disposition": f'{disp_type}; filename="video.mp4"; filename*=UTF-8\'\'{filename_star}',
             }
             if content_length:
                 headers["Content-Length"] = content_length
