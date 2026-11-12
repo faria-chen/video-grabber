@@ -26,8 +26,8 @@
 3. 点击 **New** → **Web Service**
 4. 连接你的 GitHub 仓库
 5. 配置：
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - **Build Command**: `pip install -U -r requirements.txt && pip install -U yt-dlp`
+   - **Start Command**: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 6. 点击 **Create Web Service**
 
 ### 方法二：Docker 部署
@@ -44,13 +44,33 @@ docker run -p 8000:8000 video-grabber
 
 ```bash
 # 安装依赖
-pip install -r requirements.txt
+pip install -U -r requirements.txt && pip install -U yt-dlp
 
 # 启动服务
-python main.py
+python app.py
 
 # 访问 http://localhost:8000
 ```
+
+## 平台风控与必需配置（2026-11）
+
+后端跑在 Render 免费层，出口是**美国机房 IP**（如 74.220.48.0/24，AS16509）。
+YouTube 会把机房 IP 判为机器人并要求登录验证；小红书 / 抖音会把海外无登录态的
+分享短链 302 到 `rednote.com/login`，yt-dlp 因此报 `Unsupported URL`。
+
+要让 YouTube / 小红书 / 抖音恢复可用，在 Render 的 Environment 里加：
+
+| 变量 | 作用 |
+| --- | --- |
+| `YTDLP_PROXY` | 住宅代理地址（`http://user:pass@host:port`），绕开机房 IP 风控 |
+| `YTDLP_COOKIES_B64` | Netscape 格式 cookies 文件的 base64（小红书 `web_session`、YouTube 登录态） |
+| `YTDLP_COOKIE_FILE` | 或者给一个 cookies 文件路径 |
+
+小红书还必须用 App「分享 → 复制链接」得到的**完整链接**（含 `xsec_token`），
+且 token 会过期；图文笔记没有视频流，属于正常现象。
+
+访问 `https://<你的后端>/api/version` 可以确认 yt-dlp 版本、代理与 Cookie 是否生效。
+每次部署都会自动升级 yt-dlp；平台接口变动很频繁，建议至少每月重新部署一次。
 
 ## 解决 Render 免费版冷启动问题
 

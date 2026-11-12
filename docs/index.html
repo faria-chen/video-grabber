@@ -246,7 +246,17 @@
             border-radius: 12px;
             text-align: center;
             font-size: 0.9em;
+            line-height: 1.6;
+            word-break: break-all;
+            overflow-wrap: anywhere;
             animation: fadeIn 0.3s ease;
+        }
+
+        .engine-status {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 0.75em;
+            color: #999;
         }
 
         .error-box.danger {
@@ -348,6 +358,7 @@
             </div>
         </div>
 
+        <p class="engine-status" id="engineStatus">引擎状态检测中…</p>
         <p class="footer">Powered by <a href="https://github.com/faria-chen/video-grabber">VideoGrabber</a> · yt-dlp</p>
     </div>
 
@@ -357,7 +368,7 @@
         const PLATFORM_KEYWORDS = {
             douyin: ['douyin', 'iesdouyin'],
             bilibili: ['bilibili', 'b23.tv'],
-            xiaohongshu: ['xiaohongshu', 'xhslink', 'xhs.'],
+            xiaohongshu: ['xiaohongshu', 'xhslink', 'xhs.', 'rednote'],
             kuaishou: ['kuaishou'],
             youtube: ['youtube', 'youtu.be'],
             tiktok: ['tiktok'],
@@ -466,6 +477,19 @@
             btn.disabled = false;
             btn.classList.remove('loading');
         }
+
+        async function loadEngineStatus() {
+            const el = document.getElementById('engineStatus');
+            if (!el) return;
+            try {
+                const r = await fetch(API_BASE + '/api/version', { cache: 'no-store' });
+                const v = await r.json();
+                el.textContent = `引擎 yt-dlp ${v.yt_dlp} · 代理 ${v.proxy ? '已配置' : '未配置'} · Cookie ${v.cookies ? '已配置' : '未配置'}`;
+            } catch (e) {
+                el.textContent = '后端未连接';
+            }
+        }
+        loadEngineStatus();
     </script>
 </body>
 </html>

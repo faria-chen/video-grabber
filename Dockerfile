@@ -7,11 +7,11 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# 先复制依赖文件，利用 Docker 缓存
+# 每次构建强制升级 yt-dlp：平台接口变动很快，旧版会集体失效
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -U -r requirements.txt && \
+    pip install --no-cache-dir -U yt-dlp
 
-# 复制应用代码
 COPY . .
 
 EXPOSE 8000

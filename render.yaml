@@ -2,10 +2,16 @@ services:
   - type: web
     name: video-grabber
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -U -r requirements.txt && pip install -U yt-dlp
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11"
+      # 可选：住宅代理，解决 Render 机房 IP 被 YouTube / 小红书风控
+      # - key: YTDLP_PROXY
+      #   sync: false
+      # 可选：Netscape 格式 cookies 文件的 base64（小红书 web_session / YouTube 登录态）
+      # - key: YTDLP_COOKIES_B64
+      #   sync: false
     plan: free
     healthCheckPath: /api/health
