@@ -72,6 +72,21 @@ YouTube 会把机房 IP 判为机器人并要求登录验证；小红书 / 抖�
 访问 `https://<你的后端>/api/version` 可以确认 yt-dlp 版本、代理与 Cookie 是否生效。
 每次部署都会自动升级 yt-dlp；平台接口变动很频繁，建议至少每月重新部署一次。
 
+### 抖音现状（2026-11，上游限制，非本项目 bug）
+
+yt-dlp 2026.10.26 的 `DouyinIE` 只请求 `aweme/v1/web/aweme/detail/`，
+不带 `a_bogus` 签名，被 Argus 风控 403，统一抛
+`Fresh cookies (not necessarily logged in) are needed` —— **这句话是误导**：
+源码里根本没检查 cookie，单纯配置 Cookie 通常无效。
+旧的 `iesdouyin.com/web/api/v2/aweme/iteminfo` 已返回空，分享页 SSR 也不再渲染 `play_addr`。
+用 yt-dlp 自带的官方抖音测试视频在本机住宅 IP 上复现同样的报错，可确认与机房 IP 无关。
+
+B站 / TikTok 不受影响。要恢复抖音，需要换成带真实浏览器的方案
+（Playwright 拦截视频请求）或接入第三方解析服务，属于另一次改造。
+
+分享口令粘贴时，链接后常紧跟「复制此链接」等中文，旧版会把中文粘进 URL
+导致 `Unsupported URL`；现已改为只截取 ASCII URL 字符，并支持短链展开后还原 `/video/<id>`。
+
 ## 解决 Render 免费版冷启动问题
 
 Render 免费版服务不活跃时会休眠，首次请求需等待 30-50 秒唤醒。解决方案：

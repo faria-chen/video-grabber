@@ -164,13 +164,27 @@ SHORT_HOSTS = (
     "youtu.be", "vm.tiktok.com", "vt.tiktok.com", "v.kuaishou.com",
 )
 NOTE_ID_RE = re.compile(r"/(?:discovery/item|explore|item)/([0-9a-f]{16,32})", re.I)
+# 只吃 ASCII URL 字符。抖音/小红书分享口令里，链接后面常紧跟「复制此链接」等中文，
+# 旧的 [^\s]+ 会把中文一起吞进 URL，yt-dlp 随后报 Unsupported URL。
+URL_RE = re.compile(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&()*+,;=%]+")
+BARE_SHORTLINK_RE = re.compile(
+    r"(?<![\w/])((?:v\.douyin\.com|xhslink\.com|xhs\.cn|b23\.tv|youtu\.be|vm\.tiktok\.com)/[A-Za-z0-9_\-]+/?)",
+    re.I,
+)
+DOUYIN_ID_RE = re.compile(
+    r"(?:douyin\.com/(?:video|share/video)/|iesdouyin\.com/share/video/|modal_id=)(\d{15,25})",
+    re.I,
+)
 
 
 def _extract_url(text: str) -> Optional[str]:
-    m = re.search(r"https?://[^\s<>\"'，。；、）】\]]+", text)
-    if not m:
-        return None
-    return m.group(0).rstrip(".,;:!?，。；！？)】")
+    m = URL_RE.search(text)
+    if m:
+        return m.group(0).rstrip(".,;:!?)]")
+    m = BARE_SHORTLINK_RE.search(text)
+    if m:
+        return "https://" + m.group(1)
+    return None
 
 
 def _follow_redirects(url: str) -> list:
@@ -241,12 +255,23 @@ def normalize_url(text: str) -> tuple:
             normalized += f"?{query}"
         return normalized, "xiaohongshu"
 
-    # 普通短链：取重定向链最后一个非登录页地址
+    # 抖音短链常被 302 到 /video/<id>、/share/video/<id> 或 ?modal_id=<id>。
+    # 还原成标准视频页，比把重定向后的首页丢给 yt-dlp 强。
+    if any("douyin" in (urlparse(item).hostname or "").lower() for item in chain):
+        for item in chain:
+            match = DOUYIN_ID_RE.search(_deep_unquote(item))
+            if match:
+                return f"https://www.douyin.com/video/{match.group(1)}", "douyin"
+
+    # 普通短链：取重定向链最后一个非登录页、非首页地址
     if need_expand:
         for item in reversed(chain):
-            if "/login" not in item:
-                url = item
-                break
+            if "/login" in item:
+                continue
+            if re.match(r"https?://(?:www\.)?(?:douyin|iesdouyin)\.com/?$", item, re.I):
+                continue
+            url = item
+            break
     return url, None
 
 
@@ -297,6 +322,17 @@ def friendly_error(message: str, platform: Optional[str], url: str) -> str:
                 "或缺少 web_session 登录 Cookie。请复制最新的完整分享链接再试。"
             )
         return "平台没返回可用视频流，可能是链接失效、图文内容或需要登录。"
+    if "fresh cookies" in low or (platform == "douyin" and "cookies" in low):
+        return (
+            "抖音当前抓不了：接口已强制 a_bogus 签名，yt-dlp 的抖音解析器取不到数据。"
+            "报错里的「Fresh cookies」是误导，单纯配 Cookie 通常没用；"
+            "要恢复得换浏览器拦截或第三方解析通道。B站 / TikTok 不受影响。"
+        )
+    if "unsupported url" in low and "douyin.com" in low:
+        return (
+            "抖音把链接重定向到了首页（短链失效或海外机房 IP 被拦）。"
+            "请重新复制最新分享链接，或给后端配住宅代理 YTDLP_PROXY。"
+        )
     if "sign in" in low or "需要登录" in message or "private video" in low:
         return (
             "平台要求登录验证。后端出口是 Render 机房 IP，容易被判为机器人，"
@@ -307,7 +343,10 @@ def friendly_error(message: str, platform: Optional[str], url: str) -> str:
     if "unable to connect to proxy" in low or "proxyerror" in low or "tunnel connection failed" in low:
         return "网络代理连不上（可能是运行环境自带的 HTTPS_PROXY，或 YTDLP_PROXY 配置有误），请检查代理设置。"
     if "unable to extract" in low or "unsupported url" in low:
-        return "解析规则可能已过期或链接不完整。请重新部署后端升级 yt-dlp，并确认粘贴的是完整链接。"
+        return (
+            f"链接没被识别（后端实际拿到：{url[:90]}）。"
+            "请确认粘贴的是完整链接；平台接口变动时可重新部署升级 yt-dlp。"
+        )
     return f"抓取失败: {message[:180]}"
 
 
