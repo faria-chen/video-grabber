@@ -7,8 +7,14 @@
   - 透传 xsec_token / xsec_source 等访问凭证
   - 移除全局 Google Referer，改为按平台设置请求头
   - 支持 YTDLP_PROXY(住宅代理) 与 YTDLP_COOKIES_B64 / YTDLP_COOKIE_FILE(登录态)
-  - YouTube 避开 SABR 客户端，改用 tv/mweb
+  - YouTube 不再强制 tv/mweb（会触发 DRM），改用新版 yt-dlp 自选客户端
   - 新增 /api/version 诊断端点，错误信息改为可直接执行的建议
+
+2026-11-15 修复:
+  - 小红书改为自定义 HTML 解析器，绕开 yt-dlp 撞登录页的问题。
+    实测同一短链：桌面 UA + 无 Accept-Language 必被 302 到 /login 空壳页；
+    移动端 UA 直接返回带 <meta property="og:video"> / masterUrl 的完整笔记页。
+  - 支持 XHS_COOKIE 注入登录态、/api/download 自动补 CDN Referer 与 Range 转发。
 """
 
 import os
@@ -20,6 +26,7 @@ import tempfile
 import threading
 import time as _time
 from pathlib import Path
+from html import unescape
 from urllib.parse import urlparse, unquote, parse_qs, urlencode
 from typing import Optional
 
@@ -66,6 +73,16 @@ def _prepare_cookiefile() -> Optional[str]:
 
 
 COOKIE_FILE = _prepare_cookiefile()
+
+# 小红书网页版登录态（原始 Cookie 字符串，可选）。
+# 部分账号/地区会要求 web_session，配置后自定义解析器会带上它请求笔记页。
+XHS_COOKIE = (
+    os.environ.get("XHS_COOKIE")
+    or os.environ.get("YTDLP_COOKIES_RAW")
+    or ""
+)
+# 最近一次小红书解析的诊断信息，通过 /api/version 暴露，便于线上排障
+XHS_DIAG: dict = {}
 
 app = FastAPI(title="视频抓取器", docs_url=None, redoc_url=None)
 
@@ -275,6 +292,185 @@ def normalize_url(text: str) -> tuple:
     return url, None
 
 
+# ─── 小红书自定义解析器 ───────────────────────────────────────────────
+# 2026-11-15 实测（同一条 xhslink 分享短链，同一出口 IP）：
+#   桌面 UA + 无 Accept-Language -> 302 到 /login，236KB 空壳页，无任何视频字段
+#   移动端 UA（哪怕只有 UA）     -> 200 完整笔记页，带 og:video / masterUrl
+# 也就是说登录页是 UA 触发的，不是 xsec_token 过期、也不一定是机房 IP 被封。
+# yt-dlp 的小红书解析器在这条链路上会先撞登录页，所以直接读页面更稳。
+XHS_HEADERS = {
+    "User-Agent": MOBILE_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://www.rednote.com/",
+}
+if XHS_COOKIE:
+    XHS_HEADERS["Cookie"] = XHS_COOKIE
+
+OG_VIDEO_RE = re.compile(r'<meta\s+property="og:video"\s+content="([^"]+)"', re.I)
+OG_TITLE_RE = re.compile(r'<meta\s+property="og:title"\s+content="([^"]+)"', re.I)
+OG_IMAGE_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"', re.I)
+TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+MASTER_URL_RE = re.compile(r'"masterUrl"\s*:\s*"((?:\\.|[^"\\])*)"')
+BACKUP_URLS_RE = re.compile(r'"backupUrls"\s*:\s*\[(.*?)\]', re.S)
+JSON_STRING_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
+VIDEO_DURATION_RE = re.compile(r'"(?:videoDuration|duration)"\s*:\s*(\d{2,9})')
+STREAM_HEIGHT_RE = re.compile(r'"height"\s*:\s*(\d{3,4})')
+
+
+def _unescape_json_url(value: str) -> str:
+    """页面里 CDN 地址被写成 http:\\u002F\\u002Fsns-...，还原并统一升级 https"""
+    value = (
+        value.replace("\\u002F", "/").replace("\\u002f", "/")
+        .replace("\\u0026", "&").replace("\\u003A", ":")
+        .replace("\\u003a", ":").replace(r"\/", "/")
+    )
+    if value.startswith("http://"):
+        value = "https://" + value[len("http://"):]
+    return value
+
+
+def _xhs_video_urls(page: str) -> list:
+    """优先 og:video（已是 https），其次 __INITIAL_STATE__ 的 masterUrl / backupUrls"""
+    candidates = []
+    m = OG_VIDEO_RE.search(page)
+    if m:
+        candidates.append(unescape(m.group(1)))
+    m = MASTER_URL_RE.search(page)
+    if m:
+        candidates.append(_unescape_json_url(m.group(1)))
+    m = BACKUP_URLS_RE.search(page)
+    if m:
+        for raw in JSON_STRING_RE.findall(m.group(1)):
+            candidates.append(_unescape_json_url(raw))
+    result = []
+    for u in candidates:
+        if u.startswith("https://") and u not in result:
+            result.append(u)
+    return result
+
+
+def _xhs_meta(page: str) -> dict:
+    title = ""
+    m = OG_TITLE_RE.search(page) or TITLE_RE.search(page)
+    if m:
+        title = unescape(m.group(1)).strip()
+        title = re.sub(r"\s*[-|]\s*(rednote|小红书)\s*$", "", title, flags=re.I).strip()
+    thumbnail = ""
+    m = OG_IMAGE_RE.search(page)
+    if m:
+        thumbnail = unescape(m.group(1))
+        if thumbnail.startswith("//"):
+            thumbnail = "https:" + thumbnail
+    duration = None
+    m = VIDEO_DURATION_RE.search(page)
+    if m:
+        raw = int(m.group(1))
+        duration = round(raw / 1000) if raw > 10000 else raw
+    # 只在视频流对象附近取 height，否则会误抓封面图的尺寸
+    height = None
+    master_at = page.find("masterUrl")
+    scope = page[max(0, master_at - 1200):master_at + 200] if master_at >= 0 else page
+    m = STREAM_HEIGHT_RE.search(scope)
+    if m:
+        height = int(m.group(1))
+    return {
+        "title": title,
+        "thumbnail": thumbnail,
+        "duration": duration,
+        "format_info": f"MP4 · {height}p" if height else "MP4 · 原画",
+    }
+
+
+def _xhs_fetch(url: str) -> tuple:
+    """返回 (html, final_url, error)"""
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=20,
+            proxy=PROXY,
+            trust_env=bool(PROXY),
+            headers=XHS_HEADERS,
+        ) as client:
+            resp = client.get(url)
+        return resp.text, str(resp.url), None
+    except Exception as exc:
+        return "", url, f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
+def _xhs_result(page: str, videos: list, source: str, diag: dict) -> dict:
+    meta = _xhs_meta(page)
+    diag["source"] = source
+    return {
+        "title": meta["title"] or "小红书视频",
+        "video_url": videos[0],
+        "thumbnail": meta["thumbnail"],
+        "platform": "小红书",
+        "duration": meta["duration"],
+        "format_info": meta["format_info"],
+        "backup_urls": videos[1:],
+    }
+
+
+def _is_xhs_login(page: str, final_url: str) -> bool:
+    return "/login" in final_url or "Log in - rednote" in page[:8000]
+
+
+def _xhs_extract(raw: str, normalized: str) -> tuple:
+    """返回 (结果 dict 或 None, 诊断 dict)。失败时由调用方回落到 yt-dlp。"""
+    diag: dict = {"attempts": [], "source": None, "reason": ""}
+    short = _extract_url(raw)
+    candidates = []
+    if short:
+        candidates.append(("share", short))
+    if normalized and normalized != short:
+        candidates.append(("normalized", normalized))
+
+    tried = set()
+
+    def attempt(tag: str, url: str) -> tuple:
+        """返回 (结果或 None, final_url)，避免为拿 redirectPath 重复发请求"""
+        tried.add(url)
+        page, final, err = _xhs_fetch(url)
+        if err:
+            diag["attempts"].append({"tag": tag, "error": err})
+            return None, ""
+        login = _is_xhs_login(page, final)
+        videos = _xhs_video_urls(page)
+        diag["attempts"].append({
+            "tag": tag,
+            "len": len(page),
+            "login": login,
+            "videos": len(videos),
+            "host": urlparse(final).hostname,
+        })
+        if videos and not login:
+            return _xhs_result(page, videos, tag, diag), final
+        return None, final
+
+    for tag, url in candidates:
+        if url in tried:
+            continue
+        result, final = attempt(tag, url)
+        if result:
+            return result, diag
+
+        # 被踢到登录页时，从 redirectPath 还原带完整参数的笔记地址再试一次
+        if tag == "share" and "/login" in final:
+            decoded = _deep_unquote(final)
+            redirect_path = parse_qs(urlparse(decoded).query).get("redirectPath", [""])[0]
+            redirect_path = _deep_unquote(redirect_path)
+            if redirect_path.startswith("http://"):
+                redirect_path = "https://" + redirect_path[len("http://"):]
+            if redirect_path.startswith("https://") and redirect_path not in tried:
+                result, _ = attempt("redirectPath", redirect_path)
+                if result:
+                    return result, diag
+
+    diag["reason"] = "no_video_stream"
+    return None, diag
+
+
 # ─── yt-dlp 配置 ──────────────────────────────────────────────────────
 def get_ydl_opts(url: str, platform: Optional[str] = None) -> dict:
     headers = {
@@ -312,14 +508,16 @@ def friendly_error(message: str, platform: Optional[str], url: str) -> str:
     low = message.lower()
     if "unsupported url" in low and ("login" in low or "rednote" in low):
         return (
-            "小红书分享短链被平台强制跳到登录页了。请在 App 里「分享 → 复制链接」"
-            "拿到带 xsec_token 的完整链接，并给后端配置登录 Cookie。"
+            "小红书页面被强制跳到登录页（自定义解析器用移动端 UA 也没绕过）。"
+            "请在浏览器登录小红书后把 Cookie 配到后端 XHS_COOKIE（需含 web_session），"
+            "或配置住宅代理 YTDLP_PROXY；/api/version 的 xhs_last 能看到具体是哪一步失败。"
         )
     if "no video formats found" in low:
         if platform == "xiaohongshu":
             return (
-                "小红书没返回视频流：链接缺 xsec_token、token 已过期、该笔记是图文，"
-                "或缺少 web_session 登录 Cookie。请复制最新的完整分享链接再试。"
+                "小红书没返回视频流：可能是图文笔记、xsec_token 已过期，"
+                "或页面被跳登录（需 XHS_COOKIE 登录态 / YTDLP_PROXY 住宅代理）。"
+                "请重新复制最新的完整分享链接再试，诊断见 /api/version 的 xhs_last。"
             )
         return "平台没返回可用视频流，可能是链接失效、图文内容或需要登录。"
     if "fresh cookies" in low or (platform == "douyin" and "cookies" in low):
@@ -372,6 +570,9 @@ async def version():
         "python": sys.version.split()[0],
         "proxy": bool(PROXY),
         "cookies": bool(COOKIE_FILE),
+        "xhs_cookie": bool(XHS_COOKIE),
+        "xhs_parser": "custom-html",
+        "xhs_last": XHS_DIAG or None,
         "uptime_seconds": int(_time.time() - STARTED_AT),
     }
 
@@ -406,6 +607,27 @@ async def grab_video(request: Request):
         )
     if not platform:
         raise HTTPException(status_code=400, detail="无法识别该链接所属平台，请检查链接是否完整")
+
+    # 小红书优先走自定义 HTML 解析器：移动端 UA 能直接拿到 og:video / masterUrl，
+    # 而 yt-dlp 在这条链路上常被 302 到 /login 后报 Unsupported URL。
+    if platform == "xiaohongshu":
+        xhs_result, xhs_diag = await loop.run_in_executor(None, _xhs_extract, raw, url)
+        XHS_DIAG.clear()
+        XHS_DIAG.update(xhs_diag)
+        XHS_DIAG["checked_at"] = int(_time.time())
+        print(f"[grab][xhs] {xhs_diag}")
+        if xhs_result:
+            return xhs_result
+        # 页面正常返回但没有视频流 => 图文笔记，别再让 yt-dlp 抛出误导性的 token 报错
+        if any(
+            not a.get("login") and a.get("videos") == 0 and "error" not in a
+            for a in xhs_diag.get("attempts", [])
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="这条小红书是图文笔记，没有可下载的视频。请换一条视频笔记链接。",
+            )
+        # 其余情况（登录页 / 网络异常）继续回落 yt-dlp
 
     try:
         t0 = _time.time()
@@ -480,14 +702,26 @@ def _extract_info(url: str, opts: dict):
 
 
 @app.get("/api/download")
-async def download_video(video_url: str, title: str = "video", inline: bool = False, referer: str = ""):
+async def download_video(request: Request, video_url: str, title: str = "video",
+                         inline: bool = False, referer: str = ""):
     if not video_url:
         raise HTTPException(status_code=400, detail="缺少视频链接")
 
     safe_title = re.sub(r'[\\/:*?"<>|]', '_', title)[:100]
-    headers = {"User-Agent": DESKTOP_UA}
+    host = (urlparse(video_url).hostname or "").lower()
+    is_xhs_cdn = "rednotecdn.com" in host or "xhscdn.com" in host
+
+    # 小红书 CDN 需要移动端 UA + 站内 Referer；前端下载链接没传 referer 时自动补。
+    headers = {"User-Agent": MOBILE_UA if is_xhs_cdn else DESKTOP_UA}
     if referer:
         headers["Referer"] = referer
+    elif is_xhs_cdn:
+        headers["Referer"] = "https://www.rednote.com/"
+
+    # <video> 预览会发 Range 请求，透传后返回 206，避免每次拉 20MB+ 全量。
+    incoming_range = request.headers.get("range")
+    if incoming_range:
+        headers["Range"] = incoming_range
 
     try:
         async with httpx.AsyncClient(
@@ -499,7 +733,7 @@ async def download_video(video_url: str, title: str = "video", inline: bool = Fa
         ) as client:
             response = await client.get(video_url)
 
-            if response.status_code != 200:
+            if response.status_code not in (200, 206):
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"视频源返回错误: {response.status_code}"
@@ -513,14 +747,19 @@ async def download_video(video_url: str, title: str = "video", inline: bool = Fa
             filename_star = quote(f"{safe_title}.mp4")
             out_headers = {
                 "Content-Disposition": f'{disp_type}; filename="video.mp4"; filename*=UTF-8\'\'{filename_star}',
+                "Accept-Ranges": "bytes",
             }
             if content_length:
                 out_headers["Content-Length"] = content_length
+            content_range = response.headers.get("content-range")
+            if content_range:
+                out_headers["Content-Range"] = content_range
 
             return HTMLResponse(
                 content=response.content,
                 media_type=content_type,
                 headers=out_headers,
+                status_code=response.status_code,
             )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="视频下载超时，请稍后重试")

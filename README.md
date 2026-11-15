@@ -55,19 +55,36 @@ python app.py
 ## 平台风控与必需配置（2026-11）
 
 后端跑在 Render 免费层，出口是**美国机房 IP**（如 74.220.48.0/24，AS16509）。
-YouTube 会把机房 IP 判为机器人并要求登录验证；小红书 / 抖音会把海外无登录态的
-分享短链 302 到 `rednote.com/login`，yt-dlp 因此报 `Unsupported URL`。
+YouTube 会把机房 IP 判为机器人并要求登录验证；抖音的限制见下一节。
 
-要让 YouTube / 小红书 / 抖音恢复可用，在 Render 的 Environment 里加：
+在 Render 的 Environment 里可配置：
 
 | 变量 | 作用 |
 | --- | --- |
 | `YTDLP_PROXY` | 住宅代理地址（`http://user:pass@host:port`），绕开机房 IP 风控 |
-| `YTDLP_COOKIES_B64` | Netscape 格式 cookies 文件的 base64（小红书 `web_session`、YouTube 登录态） |
+| `YTDLP_COOKIES_B64` | Netscape 格式 cookies 文件的 base64（YouTube 登录态等，给 yt-dlp 用） |
 | `YTDLP_COOKIE_FILE` | 或者给一个 cookies 文件路径 |
+| `XHS_COOKIE` | 小红书网页版原始 Cookie 字符串（需含 `web_session`），仅自定义解析器使用 |
 
-小红书还必须用 App「分享 → 复制链接」得到的**完整链接**（含 `xsec_token`），
-且 token 会过期；图文笔记没有视频流，属于正常现象。
+### 小红书已改用自定义解析器（2026-11-15）
+
+之前线上一直报「缺 xsec_token / 缺 Cookie」，实测**根因不是 token 过期，而是请求头**：
+同一条 `xhslink.cn` 分享短链，在同一个出口 IP 上：
+
+| 请求头 | 结果 |
+| --- | --- |
+| 桌面 UA，无 `Accept-Language`（旧 `/api/download` 的写法） | 302 到 `/login`，236KB 空壳页，零视频字段 |
+| 移动端 UA（哪怕只有 UA） | 200 完整笔记页，带 `og:video` / `__INITIAL_STATE__.masterUrl` |
+
+因此 `/api/grab` 对小红书优先走自定义 HTML 解析器：移动端 UA 跟随短链 →
+从 `og:video` / `masterUrl` / `backupUrls` 取 CDN 地址 → 直接返回，不再交给 yt-dlp。
+同时 `/api/download` 对 `rednotecdn.com` 自动补移动端 UA + `Referer`，
+并透传 `Range` 返回 206（预览不必每次拉 20MB+ 全量）。
+
+若某些账号/地区仍被跳登录页，配 `XHS_COOKIE`（浏览器登录后复制完整 Cookie，含
+`web_session`）或 `YTDLP_PROXY`。`GET /api/version` 的 `xhs_last` 会显示每次解析的
+页面长度、是否登录页、找到几条视频流、命中哪条路径，方便定位。
+图文笔记没有视频流，属于正常现象，会明确提示「这是图文笔记」。
 
 访问 `https://<你的后端>/api/version` 可以确认 yt-dlp 版本、代理与 Cookie 是否生效。
 每次部署都会自动升级 yt-dlp；平台接口变动很频繁，建议至少每月重新部署一次。
@@ -137,13 +154,16 @@ Render 免费版服务不活跃时会休眠，首次请求需等待 30-50 秒唤
 
 ```
 video-grabber/
-├── main.py              # 后端主程序
+├── app.py               # 后端主程序（FastAPI + yt-dlp + 小红书自定义解析器）
 ├── requirements.txt     # Python 依赖
 ├── Dockerfile           # Docker 部署配置
 ├── render.yaml          # Render.com 部署配置
-├── README.md           # 说明文档
+├── start.sh             # 脚本启动（自动升级 yt-dlp）
+├── README.md            # 说明文档
+├── docs/
+│   └── index.html       # GitHub Pages 前端
 └── static/
-    └── index.html       # 前端页面
+    └── index.html       # 后端根路径返回的前端
 ```
 
 ## License
