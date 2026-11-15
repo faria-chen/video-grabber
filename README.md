@@ -81,8 +81,17 @@ yt-dlp 2026.10.26 的 `DouyinIE` 只请求 `aweme/v1/web/aweme/detail/`，
 旧的 `iesdouyin.com/web/api/v2/aweme/iteminfo` 已返回空，分享页 SSR 也不再渲染 `play_addr`。
 用 yt-dlp 自带的官方抖音测试视频在本机住宅 IP 上复现同样的报错，可确认与机房 IP 无关。
 
-B站 / TikTok 不受影响。要恢复抖音，需要换成带真实浏览器的方案
-（Playwright 拦截视频请求）或接入第三方解析服务，属于另一次改造。
+B站 / TikTok 不受影响。
+
+2026-11-15 用一条**有效**分享口令（`v.douyin.com/14MDCJTec28/` → 视频 `7705370129063808283`）实测：
+短链能正常展开到 `iesdouyin.com/share/video/...`，但页面返回 `country=kh / isLogin=false`，
+只给引导下载 App 的壳 —— 没有 `<video>`、没有详情接口响应。本机住宅 IP、Render 机房 IP、
+无头 Chrome（桌面 / 移动 UA）表现一致。yt-dlp、老接口、分享页 SSR、TikWM、cobalt 公共实例、
+douyin.wtf / tenapi 及多个国内免费解析接口，全部拿不到播放地址。
+
+=> 必要条件不只是 `a_bogus` 签名，还需要**中国大陆出口 IP + 抖音登录态**，
+或接入持续维护签名的付费 / 自建解析服务（TikHub、Douyin_TikTok_Download_API）。
+单纯配 Cookie 或换 UA 都无效，别在这上面耗时间。
 
 分享口令粘贴时，链接后常紧跟「复制此链接」等中文，旧版会把中文粘进 URL
 导致 `Unsupported URL`；现已改为只截取 ASCII URL 字符，并支持短链展开后还原 `/video/<id>`。
